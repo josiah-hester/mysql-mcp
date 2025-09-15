@@ -318,10 +318,10 @@ func executeSelectQuery(ctx context.Context, query string) (*mcp.CallToolResult,
 		}, nil, nil
 	}
 
-	var results []map[string]interface{}
+	var results []map[string]any
 	for rows.Next() {
-		values := make([]interface{}, len(columns))
-		valuePtrs := make([]interface{}, len(columns))
+		values := make([]any, len(columns))
+		valuePtrs := make([]any, len(columns))
 		for i := range values {
 			valuePtrs[i] = &values[i]
 		}
@@ -335,7 +335,7 @@ func executeSelectQuery(ctx context.Context, query string) (*mcp.CallToolResult,
 			}, nil, nil
 		}
 
-		row := make(map[string]interface{})
+		row := make(map[string]any)
 		for i, col := range columns {
 			val := values[i]
 			if b, ok := val.([]byte); ok {
@@ -386,7 +386,7 @@ func executeSelectQuery(ctx context.Context, query string) (*mcp.CallToolResult,
 			Content: []mcp.Content{
 				&mcp.TextContent{Text: resultText},
 			},
-		}, map[string]interface{}{
+		}, map[string]any{
 			"rows":     results,
 			"rowCount": len(results),
 			"columns":  columns,
@@ -428,7 +428,7 @@ func executeModifyQuery(ctx context.Context, query string) (*mcp.CallToolResult,
 			Content: []mcp.Content{
 				&mcp.TextContent{Text: resultText},
 			},
-		}, map[string]interface{}{
+		}, map[string]any{
 			"rowsAffected": rowsAffected,
 			"lastInsertId": lastInsertId,
 		}, nil
