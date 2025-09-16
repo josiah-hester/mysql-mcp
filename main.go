@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"flag"
 	"fmt"
 	"log"
 	"strings"
@@ -435,6 +436,9 @@ func executeModifyQuery(ctx context.Context, query string) (*mcp.CallToolResult,
 }
 
 func main() {
+	dsn := flag.String("dsn", "", "MySQL DSN (e.g., user:password@tcp(localhost:3306)/database)")
+	flag.Parse()
+
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "mysql-mcp-server",
 		Version: "1.0.0",
@@ -464,6 +468,21 @@ func main() {
 		Name:        "execute_query",
 		Description: "Execute a SQL query (SELECT queries return data, other queries return affected row count)",
 	}, ExecuteQuery)
+
+	// Auto-connect if DSN is provided
+	if *dsn != "" {
+		database, err := sql.Open("mysql", *dsn)
+		if err != nil {
+			log.Fatalf("Failed to open database: %v", err)
+		}
+
+		if err := database.Ping(); err != nil {
+			log.Fatalf("Failed to ping database: %v", err)
+		}
+
+		db = database
+		log.Printf("Successfully connected to MySQL database with DSN: %s", *dsn)
+	}
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Printf("Server failed: %v", err)

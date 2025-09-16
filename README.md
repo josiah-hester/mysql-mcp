@@ -75,9 +75,38 @@ go build -o mysql-mcp-server
 
 The server runs over stdin/stdout and communicates using the MCP protocol.
 
+### Command Line Options
+
+- `-dsn string`: MySQL DSN for automatic connection on startup (optional)
+
+### Examples
+
+#### Basic usage (connect manually via MCP tools):
+```bash
+./mysql-mcp-server
+```
+
+#### Auto-connect on startup:
+```bash
+./mysql-mcp-server -dsn="readonly_user:password@tcp(localhost:3306)/myapp"
+```
+
 ### Example with Claude Desktop
 
 Add to your MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "mysql": {
+      "command": "/path/to/mysql-mcp-server",
+      "args": ["-dsn=readonly_user:password@tcp(localhost:3306)/myapp"]
+    }
+  }
+}
+```
+
+Or without auto-connect:
 
 ```json
 {
