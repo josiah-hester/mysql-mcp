@@ -1,18 +1,31 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var db *sql.DB
+var (
+	version = "1.0.0"
+	commit  = "dev"
+	date    = "unknown"
+	db      *sql.DB
+)
 
 type ConnectParams struct {
 	DSN string `json:"dsn"`
@@ -435,9 +448,174 @@ func executeModifyQuery(ctx context.Context, query string) (*mcp.CallToolResult,
 		}, nil
 }
 
+type GitHubRelease struct {
+	TagName string `json:"tag_name"`
+	Assets  []struct {
+		Name               string `json:"name"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	} `json:"assets"`
+}
+
+func updateSelf() error {
+	fmt.Println("Checking for updates...")
+
+	// Get latest release from GitHub API
+	resp, err := http.Get("https://api.github.com/repos/josiah-hester/mysql-mcp/releases/latest")
+	if err != nil {
+		return fmt.Errorf("failed to check for updates: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to get release info: HTTP %d", resp.StatusCode)
+	}
+
+	var release GitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return fmt.Errorf("failed to parse release info: %w", err)
+	}
+
+	if release.TagName == "v"+version {
+		fmt.Printf("Already up to date (version %s)\n", version)
+		return nil
+	}
+
+	fmt.Printf("Found newer version: %s (current: %s)\n", release.TagName, version)
+
+	// Find the correct asset for current OS and architecture
+	osName := runtime.GOOS
+	if osName == "darwin" {
+		osName = "Darwin"
+	} else if osName == "linux" {
+		osName = "Linux"
+	} else if osName == "windows" {
+		osName = "Windows"
+	}
+
+	archName := runtime.GOARCH
+	if archName == "amd64" {
+		archName = "x86_64"
+	}
+
+	var downloadURL string
+	expectedName := fmt.Sprintf("mysql-mcp_%s_%s", osName, archName)
+
+	for _, asset := range release.Assets {
+		if strings.Contains(asset.Name, expectedName) {
+			downloadURL = asset.BrowserDownloadURL
+			break
+		}
+	}
+
+	if downloadURL == "" {
+		return fmt.Errorf("no compatible release found for %s %s", osName, archName)
+	}
+
+	fmt.Printf("Downloading %s...\n", downloadURL)
+
+	// Download the release
+	resp, err = http.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("failed to download update: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download update: HTTP %d", resp.StatusCode)
+	}
+
+	// Get current executable path
+	currentExe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get current executable path: %w", err)
+	}
+
+	// Create temporary file for the new binary
+	tempFile := currentExe + ".new"
+
+	// Extract and save the new binary
+	if err := extractBinary(resp.Body, tempFile); err != nil {
+		return fmt.Errorf("failed to extract update: %w", err)
+	}
+
+	// Make the new binary executable
+	if err := os.Chmod(tempFile, 0755); err != nil {
+		os.Remove(tempFile)
+		return fmt.Errorf("failed to make new binary executable: %w", err)
+	}
+
+	// Replace the current binary
+	if err := os.Rename(tempFile, currentExe); err != nil {
+		os.Remove(tempFile)
+		return fmt.Errorf("failed to replace binary: %w", err)
+	}
+
+	fmt.Printf("Successfully updated to version %s\n", release.TagName)
+	fmt.Println("Please restart the application to use the new version.")
+
+	return nil
+}
+
+func extractBinary(src io.Reader, destPath string) error {
+	// Create destination file
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	// Check if it's a gzipped tar archive
+	gzReader, err := gzip.NewReader(src)
+	if err != nil {
+		// If it's not gzipped, assume it's a raw binary and copy directly
+		_, copyErr := io.Copy(destFile, src)
+		return copyErr
+	}
+	defer gzReader.Close()
+
+	tarReader := tar.NewReader(gzReader)
+
+	// Find the binary file in the tar archive
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		// Look for the binary (usually the file without extension or with .exe)
+		filename := filepath.Base(header.Name)
+		if strings.HasPrefix(filename, "mysql-mcp") && header.Typeflag == tar.TypeReg {
+			// Copy the binary content
+			_, err := io.Copy(destFile, tarReader)
+			return err
+		}
+	}
+
+	return fmt.Errorf("binary not found in archive")
+}
+
 func main() {
 	dsn := flag.String("dsn", "", "MySQL DSN (e.g., user:password@tcp(localhost:3306)/database)")
+	versionFlag := flag.Bool("version", false, "Print version information")
+	updateFlag := flag.Bool("update", false, "Update to the latest version from GitHub")
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("mysql-mcp-server version %s\n", version)
+		fmt.Printf("Commit: %s\n", commit)
+		fmt.Printf("Built: %s\n", date)
+		return
+	}
+
+	if *updateFlag {
+		if err := updateSelf(); err != nil {
+			log.Fatalf("Update failed: %v", err)
+		}
+		return
+	}
 
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "mysql-mcp-server",
